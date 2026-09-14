@@ -3,7 +3,7 @@
 // Searches each place for reviews of the business, works out WHY people are happy and
 // WHY they are unhappy, and emails it. Read-only: nothing is posted or replied to.
 const { BUSINESS, PLACES, GROUPS, SETTINGS } = require("./config");
-const { findAt, pickModel } = require("./1-search");
+const { findAt, pickModel, pickAnalysisModel } = require("./1-search");
 const { collect, findThemes, tally } = require("./2-themes");
 const { buildReport, sendReport } = require("./3-report");
 
@@ -19,7 +19,14 @@ async function main() {
   // search fail silently last time
   console.log(`\nChoosing a model...`);
   const model = await pickModel();
-  if (!model) { console.log(`!! No usable model for this key. Nothing can be searched.`); process.exit(1); }
+  await pickAnalysisModel(console.log);
+  if (!model) {
+    console.log(`\n!! Nothing can be searched with this key.`);
+    console.log(`   Free-tier Google Search grounding works ONLY on the 2.5 models, and this`);
+    console.log(`   key has none. Either use a key from a project that has 2.5 access, or`);
+    console.log(`   enable billing, which unlocks grounding on the newer models.`);
+    process.exit(1);
+  }
 
   const groups = SETTINGS.MAX_PLACES ? GROUPS.slice(0, SETTINGS.MAX_PLACES) : GROUPS;
   console.log(`\nSearching ${groups.length} groups covering ${PLACES.length} kinds of site...`);
@@ -39,12 +46,13 @@ async function main() {
     console.log(`\n!! EVERY SEARCH FAILED. This is not a finding that no reviews exist.`);
     console.log(`   Reason: ${results[0].error}`);
     if (results.some((r) => r.quota)) {
-      console.log(`\n   This is a QUOTA limit, not a fault in the agent. Any of these fixes it:`);
-      console.log(`     1. Give this agent its own key — add REVIEW_GEMINI_KEY as a secret.`);
-      console.log(`        The compliance agents run daily on GEMINI_KEY and may spend it first.`);
-      console.log(`     2. Enable billing on the Google AI Studio project. Search grounding is`);
-      console.log(`        metered far more tightly than ordinary calls and the free allowance is small.`);
-      console.log(`     3. Run it again tomorrow — the quota resets daily.`);
+      console.log(`\n   A quota message here usually means the WRONG MODEL FAMILY, not a spent allowance:`);
+      console.log(`     · Free-tier Google Search grounding works only on the 2.5 models (500/day).`);
+      console.log(`     · Grounding on the 3.x models is paid-only, and returns a quota error at once`);
+      console.log(`       even on a key that has never been used.`);
+      console.log(`   The agent now forces a 2.5 model. If it still fails:`);
+      console.log(`     1. Enable billing on the project — that unlocks grounding properly.`);
+      console.log(`     2. Or wait for the daily reset if the 500 really were used.`);
     }
   }
 
