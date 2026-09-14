@@ -6,6 +6,40 @@
 // have Trustpilot buried, because a bad Trustpilot page is what a prospect often sees.
 const { BUSINESS, SETTINGS } = require("./config");
 
+// Model names get retired — gemini-2.5-flash vanished and every search failed with
+// "no longer available". So rather than hardcoding one, the API is asked which models
+// exist and which support search grounding, and the best available is used. The result
+// is cached for the run.
+let PICKED = null;
+async function pickModel(log = console.log) {
+  if (PICKED) return PICKED;
+  const preferred = [SETTINGS.SEARCH_MODEL, "gemini-flash-latest", "gemini-pro-latest",
+                     "gemini-2.0-flash", "gemini-flash-lite-latest"];
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_KEY}&pageSize=200`);
+    const d = await res.json();
+    if (!res.ok) throw new Error(d?.error?.message || `${res.status}`);
+    const usable = (d.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+      .map((m) => String(m.name).replace(/^models\//, ""))
+      .filter((n) => !/embedding|aqa|imagen|veo|tts/i.test(n));
+
+    // the first preference that actually exists
+    for (const want of preferred) {
+      const hit = usable.find((n) => n === want) || usable.find((n) => n.startsWith(want));
+      if (hit) { PICKED = hit; log(`  using model: ${hit}`); return PICKED; }
+    }
+    // otherwise any flash model, then anything at all
+    PICKED = usable.find((n) => /flash/i.test(n)) || usable[0];
+    if (PICKED) { log(`  no preferred model available, using: ${PICKED}`); return PICKED; }
+    throw new Error("the key has no usable models");
+  } catch (e) {
+    log(`  could not list models (${e.message}); falling back to ${preferred[1]}`);
+    PICKED = preferred[1];
+    return PICKED;
+  }
+}
+
 async function grounded(prompt, model) {
   if (!process.env.GEMINI_KEY) return { error: "no GEMINI_KEY" };
   try {
@@ -32,6 +66,7 @@ async function grounded(prompt, model) {
 const namesLine = () => BUSINESS.aliases.map((a) => `"${a}"`).join(", ");
 
 async function findAt(place) {
+  const model = await pickModel();
   const prompt = `Search the public web for customer reviews and complaints about an immigration consultancy.
 
 Business names to search for: ${namesLine()}
@@ -59,7 +94,14 @@ Reply ONLY JSON:
  ],
  "note": "<anything important about coverage, max 20 words>"}`;
 
-  const r = await grounded(prompt, SETTINGS.SEARCH_MODEL);
+  let r = await grounded(prompt, model);
+  // some models reject the search tool rather than the request; try the next one before
+  // reporting the whole place as unsearchable
+  if (r.error && /tool|google_search|not supported|INVALID_ARGUMENT/i.test(r.error)) {
+    PICKED = null;
+    const alt = await pickModel(() => {});
+    if (alt && alt !== model) r = await grounded(prompt, alt);
+  }
   if (r.error) return { place, error: r.error };
   const m = String(r.text || "").match(/\{[\s\S]*\}/);
   if (!m) return { place, error: "no readable answer", raw: String(r.text || "").slice(0, 200) };
@@ -69,4 +111,4 @@ Reply ONLY JSON:
   } catch (e) { return { place, error: `could not parse the answer: ${e.message}` }; }
 }
 
-module.exports = { findAt, grounded };
+module.exports = { findAt, grounded, pickModel };
