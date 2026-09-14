@@ -4,7 +4,7 @@
 // people praise and WHAT they complain about, because only the second kind is fixable.
 // So every theme carries a count, real quotes, and where it was said.
 const { BUSINESS, SETTINGS } = require("./config");
-const { pickModel } = require("./1-search");
+const { pickAnalysisModel } = require("./1-search");
 
 async function ask(prompt, model) {
   if (!SETTINGS.GEMINI_KEY) return { error: "no API key" };
@@ -73,7 +73,7 @@ Reply ONLY JSON:
  "watchFor": "<the thing most likely to become a bigger problem, 1 sentence>"
 }`;
 
-  return ask(prompt, await pickModel(() => {}));
+  return ask(prompt, await pickAnalysisModel());
 }
 
 // counts by sentiment and by place, straight from the data rather than from the AI
