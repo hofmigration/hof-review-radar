@@ -7,9 +7,9 @@ const { BUSINESS, SETTINGS } = require("./config");
 const { pickModel } = require("./1-search");
 
 async function ask(prompt, model) {
-  if (!process.env.GEMINI_KEY) return { error: "no GEMINI_KEY" };
+  if (!SETTINGS.GEMINI_KEY) return { error: "no API key" };
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_KEY}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${SETTINGS.GEMINI_KEY}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0 } }),
     });
@@ -27,7 +27,7 @@ function collect(results) {
     if (!r || r.error || !Array.isArray(r.reviews)) continue;
     for (const rev of r.reviews) {
       if (!rev || !rev.text) continue;
-      reviews.push({ ...rev, place: r.place.label, placeId: r.place.id });
+      reviews.push({ ...rev, place: rev.site || r.place.label, placeId: r.place.id });
     }
   }
   return reviews;
