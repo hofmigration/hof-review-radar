@@ -49,7 +49,10 @@ function buildReport({ themes, counts, results, dryRun }) {
   const empty = results.filter((r) => !r.error && r.found === false);
 
   const allFailed = results.length > 0 && failed.length === results.length;
-  const banner = allFailed
+  const quotaHit = results.some((r) => r.quota);
+  const banner = allFailed && quotaHit
+    ? { bg: C.badbg, fg: C.bad, text: `<strong>Nothing could be searched — the API quota ran out.</strong> This is not a finding that no reviews exist. Give this agent its own API key, or enable billing: web search grounding has a small free allowance.` }
+    : allFailed
     ? { bg: C.badbg, fg: C.bad, text: `<strong>Nothing could be searched.</strong> Every site failed, so this is NOT a finding that no reviews exist — see the reason below.` }
     : neg.length
     ? { bg: C.badbg, fg: C.bad, text: `<strong>${neg.length} thing${neg.length>1?"s":""} people complain about.</strong> Each one below says what would fix it.` }
