@@ -1,143 +1,176 @@
-// 1-search.js — finds the reviews.
+// 1-search.js — finding the pages, and reading them.
 //
-// Uses Gemini with Google Search grounding, so there is no second service to pay for or
-// maintain, and every answer comes back with the pages it came from. Each place is
-// searched separately: a business with 200 Google reviews and 3 on Trustpilot should not
-// have Trustpilot buried, because a bad Trustpilot page is what a prospect often sees.
+// WHY THIS DOES NOT USE GEMINI TO SEARCH ANY MORE
+// Gemini's Google Search grounding looked like the neat answer — one key, no extra
+// service. In practice it is closed on the free tier: grounding works only on the 2.5
+// family, and those models are now retired; grounding on the 3.x models is paid-only and
+// returns "you exceeded your current quota" on a key that has never been used. Three
+// attempts to work around that all failed for the same underlying reason.
+//
+// So searching and reading are now separate from the model:
+//   1. a real search API finds the pages           (Brave or Google, both free tiers)
+//   2. this fetches those pages and strips the text
+//   3. an ordinary Gemini call reads the reviews out of the text — no grounding, which
+//      works fine on the free tier
+//
+// With no search key at all it still works on SEED_URLS: pages you already know about.
 const { BUSINESS, PLACES, GROUPS, SETTINGS } = require("./config");
+
 const KEY = () => SETTINGS.GEMINI_KEY;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Model names get retired — gemini-2.5-flash vanished and every search failed with
-// "no longer available". So rather than hardcoding one, the API is asked which models
-// exist and which support search grounding, and the best available is used. The result
-// is cached for the run.
-let PICKED = null, ANALYSIS = null, AVAILABLE = null;
+// ---------------------------------------------------------------- search providers
+async function braveSearch(q, count = 8) {
+  const key = process.env.BRAVE_KEY;
+  if (!key) return { error: "no BRAVE_KEY" };
+  const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=${count}`,
+    { headers: { "X-Subscription-Token": key, Accept: "application/json" } });
+  if (!res.ok) return { error: `Brave ${res.status}: ${(await res.text()).slice(0, 120)}` };
+  const d = await res.json();
+  return { results: (d.web?.results || []).map((r) => ({ title: r.title, url: r.url, snippet: r.description || "" })) };
+}
 
-async function listModels() {
-  if (AVAILABLE) return AVAILABLE;
+async function googleCse(q, count = 8) {
+  const key = process.env.GOOGLE_CSE_KEY, cx = process.env.GOOGLE_CSE_ID;
+  if (!key || !cx) return { error: "no GOOGLE_CSE_KEY / GOOGLE_CSE_ID" };
+  const res = await fetch(`https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(q)}&num=${Math.min(count, 10)}`);
+  if (!res.ok) return { error: `Google CSE ${res.status}: ${(await res.text()).slice(0, 120)}` };
+  const d = await res.json();
+  return { results: (d.items || []).map((r) => ({ title: r.title, url: r.link, snippet: r.snippet || "" })) };
+}
+
+// whichever is configured; reports plainly when neither is
+async function search(q) {
+  if (process.env.BRAVE_KEY) return { via: "Brave", ...(await braveSearch(q)) };
+  if (process.env.GOOGLE_CSE_KEY) return { via: "Google", ...(await googleCse(q)) };
+  return { error: "no search key configured (BRAVE_KEY or GOOGLE_CSE_KEY)" };
+}
+const searchProvider = () =>
+  process.env.BRAVE_KEY ? "Brave Search" : process.env.GOOGLE_CSE_KEY ? "Google Custom Search" : null;
+
+// ---------------------------------------------------------------- reading a page
+async function readPage(url) {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; HOF-review-radar/1.0)", Accept: "text/html" },
+      redirect: "follow", signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return { url, error: `${res.status}` };
+    const html = await res.text();
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
+      .replace(/&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"')
+      .replace(/\s+/g, " ").trim();
+    return { url, text };
+  } catch (e) { return { url, error: e.message }; }
+}
+
+// ---------------------------------------------------------------- the model, no grounding
+let MODEL = null;
+async function pickModel(log = () => {}) {
+  if (MODEL) return MODEL;
+  const order = [SETTINGS.ANALYSE_MODEL, "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.0-flash"];
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${KEY()}&pageSize=200`);
     const d = await res.json();
     if (!res.ok) throw new Error(d?.error?.message || `${res.status}`);
-    AVAILABLE = (d.models || [])
+    const usable = (d.models || [])
       .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
       .map((m) => String(m.name).replace(/^models\//, ""))
       .filter((n) => !/embedding|aqa|imagen|veo|tts/i.test(n));
-    return AVAILABLE;
-  } catch (e) { AVAILABLE = { error: e.message }; return AVAILABLE; }
+    for (const want of order) {
+      const hit = usable.find((n) => n === want) || usable.find((n) => n.startsWith(want));
+      if (hit) { MODEL = hit; log(`  model: ${hit}`); return MODEL; }
+    }
+    MODEL = usable.find((n) => /flash/i.test(n)) || usable[0];
+    log(`  model: ${MODEL}`);
+    return MODEL;
+  } catch (e) { log(`  could not list models (${e.message}); using ${order[1]}`); MODEL = order[1]; return MODEL; }
 }
 
-// The model used for SEARCHING must be in the 2.5 family: on the free tier that is the
-// only family where Google Search grounding works. A 3.x model returns a quota error
-// immediately, whatever the actual usage.
-async function pickModel(log = console.log) {
-  if (PICKED) return PICKED;
-  const all = await listModels();
-  if (all.error) { log(`  could not list models (${all.error}); trying ${SETTINGS.SEARCH_MODEL}`); PICKED = SETTINGS.SEARCH_MODEL; return PICKED; }
-
-  const twoFive = all.filter((n) => SETTINGS.SEARCH_MODEL_FAMILY.test(n));
-  const order = [SETTINGS.SEARCH_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"];
-  for (const want of order) {
-    const hit = twoFive.find((n) => n === want) || twoFive.find((n) => n.startsWith(want));
-    if (hit) { PICKED = hit; log(`  search model: ${hit}  (2.5 family — required for grounding on the free tier)`); return PICKED; }
-  }
-  if (twoFive.length) { PICKED = twoFive[0]; log(`  search model: ${PICKED}`); return PICKED; }
-
-  log(`  !! This key has NO 2.5 model available, and free-tier Google Search grounding only`);
-  log(`     works on the 2.5 family. Searching will fail until the project has billing`);
-  log(`     enabled, which unlocks grounding on the newer models.`);
-  log(`     Models this key can see: ${all.slice(0, 12).join(", ")}${all.length > 12 ? ` and ${all.length - 12} more` : ""}`);
-  PICKED = null;
-  return null;
-}
-
-// Analysis does no searching, so any model will do.
-async function pickAnalysisModel(log = () => {}) {
-  if (ANALYSIS) return ANALYSIS;
-  const all = await listModels();
-  if (all.error) { ANALYSIS = SETTINGS.ANALYSE_MODEL; return ANALYSIS; }
-  const order = [SETTINGS.ANALYSE_MODEL, "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"];
-  for (const want of order) {
-    const hit = all.find((n) => n === want) || all.find((n) => n.startsWith(want));
-    if (hit) { ANALYSIS = hit; log(`  analysis model: ${hit}`); return ANALYSIS; }
-  }
-  ANALYSIS = all.find((n) => /flash/i.test(n)) || all[0];
-  return ANALYSIS;
-}
-
-async function grounded(prompt, model, attempt = 0) {
+async function ask(prompt, attempt = 0) {
   if (!KEY()) return { error: "no API key" };
+  const model = await pickModel();
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${KEY()}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { temperature: 0 },
-      }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0 } }),
     });
-    const data = await res.json();
-    if (!res.ok) return { error: data?.error?.message || `${res.status}` };
-    const cand = data?.candidates?.[0];
-    const text = (cand?.content?.parts || []).map((p) => p.text).filter(Boolean).join("\n");
-    // the pages the answer was actually grounded in
-    const sources = (cand?.groundingMetadata?.groundingChunks || [])
-      .map((c) => c.web?.uri && { title: c.web.title || c.web.uri, url: c.web.uri })
-      .filter(Boolean);
-    return { text, sources };
+    const d = await res.json();
+    if (!res.ok) {
+      const msg = d?.error?.message || `${res.status}`;
+      if ((res.status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(msg)) && attempt < SETTINGS.RETRIES) {
+        await sleep(SETTINGS.RETRY_WAIT_MS * (attempt + 1));
+        return ask(prompt, attempt + 1);
+      }
+      return { error: msg };
+    }
+    const t = (d?.candidates?.[0]?.content?.parts || []).map((p) => p.text).filter(Boolean).join("\n");
+    const m = t.match(/\{[\s\S]*\}/);
+    return m ? JSON.parse(m[0]) : { error: "no readable answer" };
   } catch (e) { return { error: e.message }; }
 }
 
-const namesLine = () => BUSINESS.aliases.map((a) => `"${a}"`).join(", ");
+// ---------------------------------------------------------------- one group
+const namesLine = () => BUSINESS.aliases.map((a) => `"${a}"`).join(" OR ");
 
 async function findAt(group) {
-  const model = await pickModel(() => {});
-  if (!model) return { place: group, error: "no 2.5 model available for grounded search on this key", noModel: true };
   const members = PLACES.filter((p) => group.places.includes(p.id));
-  const where = members.map((p) => `${p.label} (${p.hint})`).join("; ");
+  const pages = [];
+  const searched = [];
 
-  const prompt = `Search the public web for customer reviews and complaints about an immigration consultancy.
+  // pages you already named always get read, so this works with no search key at all
+  for (const u of (SETTINGS.SEED_URLS || [])) {
+    if (members.some((m) => (u.place || "").toLowerCase() === m.id)) pages.push({ url: u.url, seed: true });
+  }
 
-Business names to search for: ${namesLine()}
-Locations: ${BUSINESS.locations.join(", ")}
-Where to look: ${where}
+  if (searchProvider()) {
+    for (const m of members) {
+      const q = `${namesLine()} ${BUSINESS.locations[0]} reviews ${m.query || m.label}`;
+      const r = await search(q);
+      searched.push({ query: q, via: r.via, error: r.error, n: (r.results || []).length });
+      for (const hit of (r.results || []).slice(0, SETTINGS.PAGES_PER_SITE)) {
+        if (!pages.some((p) => p.url === hit.url)) pages.push({ ...hit, place: m.label });
+      }
+    }
+  }
 
-Find ACTUAL reviews or first-hand accounts written by clients or staff. Do not include the company's own marketing, its website copy, press releases, or directory listings with no review text.
+  if (!pages.length) {
+    const why = searchProvider()
+      ? `nothing found for ${group.label}`
+      : `no search key set, and no seed URLs for ${group.label}`;
+    return { place: group, found: false, note: why, searched };
+  }
 
-For each review found, give:
-- the rating if one is shown (out of 5)
-- roughly when it was written, if shown
-- what the person actually said, in their words where possible
-- the page it is on
+  // read the pages, then have the model pull the reviews out of the text
+  const read = [];
+  for (const p of pages.slice(0, SETTINGS.PAGES_PER_GROUP)) {
+    const r = await readPage(p.url);
+    if (r.text && r.text.length > 400) read.push({ url: p.url, place: p.place || "", text: r.text.slice(0, 9000) });
+  }
+  if (!read.length) return { place: group, found: false, note: "the pages found could not be read", searched };
 
-If you find nothing real at this place, say so plainly rather than inventing examples.
+  const blob = read.map((r, i) => `--- PAGE ${i + 1} (${r.url}) ---\n${r.text}`).join("\n\n").slice(0, 26000);
+  const parsed = await ask(`These are pages that may contain customer reviews of an immigration consultancy called ${BUSINESS.name} (also known as ${BUSINESS.aliases.join(", ")}).
+
+Pull out ONLY genuine reviews or first-hand accounts written by clients or staff. Ignore the company's own marketing, navigation text, adverts, and reviews that are clearly about a different business.
+
+If a page has no real review content, ignore it. Do not invent examples.
+
+${blob}
 
 Reply ONLY JSON:
 {"found": true|false,
- "overallRating": "<the average shown on that site, or empty>",
- "reviewCount": "<the total shown on that site, or empty>",
  "reviews": [
-   {"rating": "<1-5 or empty>", "when": "<e.g. 2 months ago, or empty>",
-    "text": "<what they said, max 60 words>", "sentiment": "positive"|"negative"|"mixed",
-    "url": "<the page>"}
+  {"rating":"<1-5 or empty>","when":"<when written, or empty>",
+   "text":"<what they said, max 60 words>","sentiment":"positive"|"negative"|"mixed",
+   "site":"<which site, e.g. Google, Trustpilot, Reddit>","url":"<the page>"}
  ],
- "note": "<anything important about coverage, max 20 words>"}`;
+ "note":"<anything about coverage, max 20 words>"}`);
 
-  let r = await grounded(prompt, model);
-  // some models reject the search tool rather than the request; try the next one before
-  // reporting the whole place as unsearchable
-  if (r.error && /tool|google_search|not supported|INVALID_ARGUMENT/i.test(r.error)) {
-    const all = await listModels();
-    const alt = Array.isArray(all) ? all.filter((n) => SETTINGS.SEARCH_MODEL_FAMILY.test(n) && n !== model)[0] : null;
-    if (alt) r = await grounded(prompt, alt);
-  }
-  if (r.error) return { place: group, error: r.error, quota: r.quota };
-  const m = String(r.text || "").match(/\{[\s\S]*\}/);
-  if (!m) return { place: group, error: "no readable answer", raw: String(r.text || "").slice(0, 200) };
-  try {
-    const parsed = JSON.parse(m[0]);
-    return { place: group, ...parsed, sources: r.sources || [] };
-  } catch (e) { return { place: group, error: `could not parse the answer: ${e.message}` }; }
+  if (parsed.error) return { place: group, error: parsed.error, searched, pagesRead: read.length };
+  return { place: group, ...parsed, searched, pagesRead: read.length };
 }
 
-module.exports = { findAt, grounded, pickModel, pickAnalysisModel, listModels };
+module.exports = { findAt, search, searchProvider, readPage, pickModel, ask };
