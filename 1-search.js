@@ -4,7 +4,8 @@
 // maintain, and every answer comes back with the pages it came from. Each place is
 // searched separately: a business with 200 Google reviews and 3 on Trustpilot should not
 // have Trustpilot buried, because a bad Trustpilot page is what a prospect often sees.
-const { BUSINESS, SETTINGS } = require("./config");
+const { BUSINESS, PLACES, GROUPS, SETTINGS } = require("./config");
+const KEY = () => SETTINGS.GEMINI_KEY;
 
 // Model names get retired — gemini-2.5-flash vanished and every search failed with
 // "no longer available". So rather than hardcoding one, the API is asked which models
@@ -16,7 +17,7 @@ async function pickModel(log = console.log) {
   const preferred = [SETTINGS.SEARCH_MODEL, "gemini-flash-latest", "gemini-pro-latest",
                      "gemini-2.0-flash", "gemini-flash-lite-latest"];
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${process.env.GEMINI_KEY}&pageSize=200`);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${KEY()}&pageSize=200`);
     const d = await res.json();
     if (!res.ok) throw new Error(d?.error?.message || `${res.status}`);
     const usable = (d.models || [])
@@ -40,10 +41,12 @@ async function pickModel(log = console.log) {
   }
 }
 
-async function grounded(prompt, model) {
-  if (!process.env.GEMINI_KEY) return { error: "no GEMINI_KEY" };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function grounded(prompt, model, attempt = 0) {
+  if (!KEY()) return { error: "no API key" };
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_KEY}`, {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${KEY()}`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
@@ -65,13 +68,16 @@ async function grounded(prompt, model) {
 
 const namesLine = () => BUSINESS.aliases.map((a) => `"${a}"`).join(", ");
 
-async function findAt(place) {
+async function findAt(group) {
   const model = await pickModel();
+  const members = PLACES.filter((p) => group.places.includes(p.id));
+  const where = members.map((p) => `${p.label} (${p.hint})`).join("; ");
+
   const prompt = `Search the public web for customer reviews and complaints about an immigration consultancy.
 
 Business names to search for: ${namesLine()}
 Locations: ${BUSINESS.locations.join(", ")}
-Where to look: ${place.hint}
+Where to look: ${where}
 
 Find ACTUAL reviews or first-hand accounts written by clients or staff. Do not include the company's own marketing, its website copy, press releases, or directory listings with no review text.
 
@@ -102,13 +108,13 @@ Reply ONLY JSON:
     const alt = await pickModel(() => {});
     if (alt && alt !== model) r = await grounded(prompt, alt);
   }
-  if (r.error) return { place, error: r.error };
+  if (r.error) return { place: group, error: r.error, quota: r.quota };
   const m = String(r.text || "").match(/\{[\s\S]*\}/);
-  if (!m) return { place, error: "no readable answer", raw: String(r.text || "").slice(0, 200) };
+  if (!m) return { place: group, error: "no readable answer", raw: String(r.text || "").slice(0, 200) };
   try {
     const parsed = JSON.parse(m[0]);
-    return { place, ...parsed, sources: r.sources || [] };
-  } catch (e) { return { place, error: `could not parse the answer: ${e.message}` }; }
+    return { place: group, ...parsed, sources: r.sources || [] };
+  } catch (e) { return { place: group, error: `could not parse the answer: ${e.message}` }; }
 }
 
 module.exports = { findAt, grounded, pickModel };
