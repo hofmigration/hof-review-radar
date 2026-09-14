@@ -56,5 +56,13 @@ check("the report escapes text", !/<script/i.test(html));
 const emptyHtml = buildReport({ themes:{}, counts: tally([]), results:[{place:{label:"Google",id:"google"},found:false}], dryRun:true });
 check("finding nothing is reported as nothing, not as good news", /No reviews were found/.test(emptyHtml));
 
+// a run where everything failed must not look like good news
+const brokenHtml = buildReport({ themes:{}, counts: tally([]),
+  results: PLACES.map((p)=>({ place:p, error:"model no longer available" })), dryRun:true });
+check("a total search failure is not reported as 'no reviews'",
+  /Nothing could be searched/.test(brokenHtml) && !/No repeated complaints/.test(brokenHtml));
+check("the model is a preference, not hardcoded into the search",
+  /pickModel/.test(require("fs").readFileSync("./1-search.js","utf8")));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
