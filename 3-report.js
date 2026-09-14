@@ -51,7 +51,7 @@ function buildReport({ themes, counts, results, dryRun }) {
   const allFailed = results.length > 0 && failed.length === results.length;
   const quotaHit = results.some((r) => r.quota);
   const banner = allFailed && quotaHit
-    ? { bg: C.badbg, fg: C.bad, text: `<strong>Nothing could be searched — the API quota ran out.</strong> This is not a finding that no reviews exist. Give this agent its own API key, or enable billing: web search grounding has a small free allowance.` }
+    ? { bg: C.badbg, fg: C.bad, text: `<strong>Nothing could be searched — the search quota was refused.</strong> This is not a finding that no reviews exist. On the free tier, Google Search grounding works only on the Gemini 2.5 models and is capped at 500 a day; grounding on newer models needs billing enabled.` }
     : allFailed
     ? { bg: C.badbg, fg: C.bad, text: `<strong>Nothing could be searched.</strong> Every site failed, so this is NOT a finding that no reviews exist — see the reason below.` }
     : neg.length
