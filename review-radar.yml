@@ -1,0 +1,39 @@
+name: Review Radar
+
+on:
+  schedule:
+    # 05:00 UTC on the 1st of each month = 10:00 AM PKT
+    - cron: "0 5 1 * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (search and print, send no email)?"
+        required: true
+        type: choice
+        default: "true"
+        options: ["true", "false"]
+      report_to:
+        description: "Who receives the report"
+        required: true
+        default: "razaali@hofmigration.com"
+        type: string
+
+jobs:
+  radar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: Check the rules still work
+        run: node selftest.js
+      - run: node radar.js
+        env:
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          RESEND_KEY: ${{ secrets.RESEND_KEY }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          REPORT_TO: ${{ inputs.report_to || 'razaali@hofmigration.com' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: review-radar, path: review-radar.html }
