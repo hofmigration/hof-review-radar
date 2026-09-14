@@ -34,6 +34,10 @@ jobs:
           # optional: a key of this agent's own, so the daily compliance agents cannot
           # spend the quota before this one runs
           REVIEW_GEMINI_KEY: ${{ secrets.REVIEW_GEMINI_KEY }}
+          # the search itself — set ONE of these (both have free tiers)
+          BRAVE_KEY: ${{ secrets.BRAVE_KEY }}
+          GOOGLE_CSE_KEY: ${{ secrets.GOOGLE_CSE_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           RESEND_KEY: ${{ secrets.RESEND_KEY }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
           REPORT_TO: ${{ inputs.report_to || 'razaali@hofmigration.com' }}
