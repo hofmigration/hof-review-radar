@@ -22,8 +22,9 @@ const BUSINESS = {
   sector: "immigration consultancy",
 };
 
-// Where to look. Each becomes its own grounded search, so one weak site does not
-// drown out the others.
+// Where to look. These are GROUPED into a few searches rather than one each, because
+// Google Search grounding is metered far more tightly than ordinary model calls and
+// eight separate searches was enough to exhaust the quota on its own.
 const PLACES = [
   { id: "google",      label: "Google reviews",        hint: "Google Maps and Google Business Profile reviews" },
   { id: "trustpilot",  label: "Trustpilot",            hint: "trustpilot.com" },
@@ -35,8 +36,25 @@ const PLACES = [
   { id: "youtube",     label: "YouTube and social",    hint: "YouTube comments, TikTok, Instagram and X posts about the company" },
 ];
 
+// Places are searched in groups. Fewer, wider searches cost a fraction of the quota and
+// return much the same thing, because one grounded search can read several sites.
+const GROUPS = [
+  { id: "reviews",    label: "Review sites",      places: ["google", "trustpilot", "facebook"] },
+  { id: "discussion", label: "Forums and social", places: ["reddit", "forums", "youtube"] },
+  { id: "complaints", label: "Complaints and staff", places: ["complaints", "glassdoor"] },
+];
+
 const SETTINGS = {
   DRY_RUN: String(process.env.DRY_RUN_INPUT || "").toLowerCase() === "true",
+
+  // The compliance agents share one GEMINI_KEY and run every day, so this agent can
+  // arrive at a quota that is already spent. Set REVIEW_GEMINI_KEY to give it its own.
+  // It falls back to GEMINI_KEY when that is not set.
+  GEMINI_KEY: process.env.REVIEW_GEMINI_KEY || process.env.GEMINI_KEY || "",
+
+  // Quota errors are usually a pause, not a wall.
+  RETRIES: 3,
+  RETRY_WAIT_MS: 20000,
 
   REPORT_TO: process.env.REPORT_TO || "razaali@hofmigration.com",
   REPORT_CC: [],                      // keep empty unless the domain is verified in Resend
@@ -54,4 +72,4 @@ const SETTINGS = {
   RECENT_MONTHS: 18,                  // older reviews are counted but marked as historic
 };
 
-module.exports = { BUSINESS, PLACES, SETTINGS };
+module.exports = { BUSINESS, PLACES, GROUPS, SETTINGS };
