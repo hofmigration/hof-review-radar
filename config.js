@@ -42,9 +42,11 @@ const SETTINGS = {
   REPORT_CC: [],                      // keep empty unless the domain is verified in Resend
   FROM_EMAIL: process.env.FROM_EMAIL || "onboarding@resend.dev",
 
-  // Grounded search needs a model that supports the google_search tool.
-  SEARCH_MODEL: process.env.SEARCH_MODEL || "gemini-2.5-flash",
-  ANALYSE_MODEL: process.env.ANALYSE_MODEL || "gemini-2.5-flash",
+  // A PREFERENCE, not a requirement. Model names get retired — gemini-2.5-flash was
+  // withdrawn and every search failed — so the agent asks the API which models exist and
+  // uses the best available. Leave this alone unless you have a reason.
+  SEARCH_MODEL: process.env.SEARCH_MODEL || "gemini-flash-latest",
+  ANALYSE_MODEL: process.env.ANALYSE_MODEL || "gemini-flash-latest",
 
   MAX_PLACES: 0,                      // 0 = every place above
   MIN_REVIEWS_FOR_THEME: 2,           // a theme needs this many mentions to be reported
