@@ -60,10 +60,17 @@ const SETTINGS = {
   REPORT_CC: [],                      // keep empty unless the domain is verified in Resend
   FROM_EMAIL: process.env.FROM_EMAIL || "onboarding@resend.dev",
 
-  // A PREFERENCE, not a requirement. Model names get retired — gemini-2.5-flash was
-  // withdrawn and every search failed — so the agent asks the API which models exist and
-  // uses the best available. Leave this alone unless you have a reason.
-  SEARCH_MODEL: process.env.SEARCH_MODEL || "gemini-flash-latest",
+  // SEARCHING and ANALYSING use different models on purpose.
+  //
+  // On the FREE tier, Google Search grounding only works on the 2.5 family, and only up
+  // to 500 requests a day. Grounding on the 3.x models is paid-only. Picking a 3.x model
+  // is what produced "you exceeded your current quota" on two different keys with the
+  // quota untouched — it was never an exhausted allowance, it was the wrong family.
+  //
+  // So the search must be a 2.5 model. The analysis does no searching, so it can use
+  // anything and is left on the newer, cheaper flash.
+  SEARCH_MODEL: process.env.SEARCH_MODEL || "gemini-2.5-flash",
+  SEARCH_MODEL_FAMILY: /2\.5/,      // free-tier grounding requires this
   ANALYSE_MODEL: process.env.ANALYSE_MODEL || "gemini-flash-latest",
 
   MAX_PLACES: 0,                      // 0 = every place above
