@@ -3,7 +3,7 @@
 // Searches each place for reviews of the business, works out WHY people are happy and
 // WHY they are unhappy, and emails it. Read-only: nothing is posted or replied to.
 const { BUSINESS, PLACES, SETTINGS } = require("./config");
-const { findAt } = require("./1-search");
+const { findAt, pickModel } = require("./1-search");
 const { collect, findThemes, tally } = require("./2-themes");
 const { buildReport, sendReport } = require("./3-report");
 
@@ -13,6 +13,12 @@ async function main() {
   if (!process.env.RESEND_KEY) console.log(`!! No RESEND_KEY — the report cannot be emailed.`);
   console.log(`Report goes to: ${SETTINGS.REPORT_TO}`);
   console.log(SETTINGS.DRY_RUN ? `DRY RUN: the report is written to the artifact, not emailed.` : `LIVE: the report will be emailed.`);
+
+  // work out which model to use once, and say so — a retired model was what made every
+  // search fail silently last time
+  console.log(`\nChoosing a model...`);
+  const model = await pickModel();
+  if (!model) { console.log(`!! No usable model for this key. Nothing can be searched.`); process.exit(1); }
 
   const places = SETTINGS.MAX_PLACES ? PLACES.slice(0, SETTINGS.MAX_PLACES) : PLACES;
   console.log(`\nSearching ${places.length} places...`);
@@ -24,6 +30,12 @@ async function main() {
     if (r.error) console.log(`  ?  ${place.label.padEnd(22)} ${r.error}`);
     else if (r.found === false) console.log(`  -  ${place.label.padEnd(22)} nothing found${r.note ? ` (${r.note})` : ""}`);
     else console.log(`  ok ${place.label.padEnd(22)} ${(r.reviews || []).length} review(s)${r.overallRating ? `, rated ${r.overallRating}` : ""}${r.reviewCount ? ` of ${r.reviewCount} shown` : ""}`);
+  }
+
+  const allFailed = results.length && results.every((r) => r.error);
+  if (allFailed) {
+    console.log(`\n!! EVERY SEARCH FAILED. This is not a finding that no reviews exist.`);
+    console.log(`   First reason: ${results[0].error}`);
   }
 
   const reviews = collect(results);
