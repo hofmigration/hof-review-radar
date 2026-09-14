@@ -1,6 +1,6 @@
 const { collect, tally } = require("./2-themes");
 const { buildReport } = require("./3-report");
-const { BUSINESS, PLACES, SETTINGS } = require("./config");
+const { BUSINESS, PLACES, GROUPS, SETTINGS } = require("./config");
 
 let pass = 0, fail = 0;
 const check = (l, ok, d="") => { console.log(`${ok?"PASS":"FAIL"}  ${l}${ok||!d?"":`\n        ${d}`}`); ok?pass++:fail++; };
@@ -58,7 +58,18 @@ check("finding nothing is reported as nothing, not as good news", /No reviews we
 
 // a run where everything failed must not look like good news
 const brokenHtml = buildReport({ themes:{}, counts: tally([]),
-  results: PLACES.map((p)=>({ place:p, error:"model no longer available" })), dryRun:true });
+  results: GROUPS.map((g)=>({ place:g, error:"model no longer available" })), dryRun:true });
+check("searches are grouped to protect the quota", GROUPS.length < PLACES.length && GROUPS.length <= 4);
+check("every place belongs to a group", (() => {
+  const covered = new Set(GROUPS.flatMap((g) => g.places));
+  return PLACES.every((p) => covered.has(p.id));
+})(), PLACES.filter((p)=>!new Set(GROUPS.flatMap((g)=>g.places)).has(p.id)).map((p)=>p.id).join(", "));
+check("a quota failure says so, and says how to fix it", (() => {
+  const h = buildReport({ themes:{}, counts: tally([]),
+    results: GROUPS.map((g)=>({ place:g, error:"You exceeded your current quota", quota:true })), dryRun:true });
+  return /quota ran out/.test(h) && /own API key/.test(h) && !/No repeated complaints/.test(h);
+})());
+check("the agent can use a key of its own", /REVIEW_GEMINI_KEY/.test(require("fs").readFileSync("./config.js","utf8")));
 check("a total search failure is not reported as 'no reviews'",
   /Nothing could be searched/.test(brokenHtml) && !/No repeated complaints/.test(brokenHtml));
 check("the model is a preference, not hardcoded into the search",
