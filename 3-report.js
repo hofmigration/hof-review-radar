@@ -48,7 +48,10 @@ function buildReport({ themes, counts, results, dryRun }) {
   const failed = results.filter((r) => r.error);
   const empty = results.filter((r) => !r.error && r.found === false);
 
-  const banner = neg.length
+  const allFailed = results.length > 0 && failed.length === results.length;
+  const banner = allFailed
+    ? { bg: C.badbg, fg: C.bad, text: `<strong>Nothing could be searched.</strong> Every site failed, so this is NOT a finding that no reviews exist — see the reason below.` }
+    : neg.length
     ? { bg: C.badbg, fg: C.bad, text: `<strong>${neg.length} thing${neg.length>1?"s":""} people complain about.</strong> Each one below says what would fix it.` }
     : counts.total
       ? { bg: C.goodbg, fg: C.good, text: `<strong>No repeated complaints found.</strong> ${counts.total} reviews read across the public web.` }
