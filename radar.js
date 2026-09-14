@@ -2,14 +2,15 @@
 //
 // Searches each place for reviews of the business, works out WHY people are happy and
 // WHY they are unhappy, and emails it. Read-only: nothing is posted or replied to.
-const { BUSINESS, PLACES, SETTINGS } = require("./config");
+const { BUSINESS, PLACES, GROUPS, SETTINGS } = require("./config");
 const { findAt, pickModel } = require("./1-search");
 const { collect, findThemes, tally } = require("./2-themes");
 const { buildReport, sendReport } = require("./3-report");
 
 async function main() {
   console.log(`=== Review radar — ${BUSINESS.name} — ${new Date().toISOString()} ===  DRY_RUN=${SETTINGS.DRY_RUN}`);
-  if (!process.env.GEMINI_KEY) { console.log(`!! No GEMINI_KEY — nothing can be searched. Add the secret.`); process.exit(1); }
+  if (!SETTINGS.GEMINI_KEY) { console.log(`!! No API key — nothing can be searched. Add GEMINI_KEY, or REVIEW_GEMINI_KEY for a key of its own.`); process.exit(1); }
+  console.log(`Key: ${process.env.REVIEW_GEMINI_KEY ? "REVIEW_GEMINI_KEY (its own)" : "GEMINI_KEY (shared with the compliance agents)"}`);
   if (!process.env.RESEND_KEY) console.log(`!! No RESEND_KEY — the report cannot be emailed.`);
   console.log(`Report goes to: ${SETTINGS.REPORT_TO}`);
   console.log(SETTINGS.DRY_RUN ? `DRY RUN: the report is written to the artifact, not emailed.` : `LIVE: the report will be emailed.`);
@@ -20,22 +21,31 @@ async function main() {
   const model = await pickModel();
   if (!model) { console.log(`!! No usable model for this key. Nothing can be searched.`); process.exit(1); }
 
-  const places = SETTINGS.MAX_PLACES ? PLACES.slice(0, SETTINGS.MAX_PLACES) : PLACES;
-  console.log(`\nSearching ${places.length} places...`);
+  const groups = SETTINGS.MAX_PLACES ? GROUPS.slice(0, SETTINGS.MAX_PLACES) : GROUPS;
+  console.log(`\nSearching ${groups.length} groups covering ${PLACES.length} kinds of site...`);
+  console.log(`(grouped on purpose: Google Search grounding is metered tightly, and one search per site exhausted the quota)`);
 
   const results = [];
-  for (const place of places) {
-    const r = await findAt(place);
+  for (const group of groups) {
+    const r = await findAt(group);
     results.push(r);
-    if (r.error) console.log(`  ?  ${place.label.padEnd(22)} ${r.error}`);
-    else if (r.found === false) console.log(`  -  ${place.label.padEnd(22)} nothing found${r.note ? ` (${r.note})` : ""}`);
-    else console.log(`  ok ${place.label.padEnd(22)} ${(r.reviews || []).length} review(s)${r.overallRating ? `, rated ${r.overallRating}` : ""}${r.reviewCount ? ` of ${r.reviewCount} shown` : ""}`);
+    if (r.error) console.log(`  ?  ${group.label.padEnd(22)} ${String(r.error).slice(0, 90)}`);
+    else if (r.found === false) console.log(`  -  ${group.label.padEnd(22)} nothing found${r.note ? ` (${r.note})` : ""}`);
+    else console.log(`  ok ${group.label.padEnd(22)} ${(r.reviews || []).length} review(s)`);
   }
 
   const allFailed = results.length && results.every((r) => r.error);
   if (allFailed) {
     console.log(`\n!! EVERY SEARCH FAILED. This is not a finding that no reviews exist.`);
-    console.log(`   First reason: ${results[0].error}`);
+    console.log(`   Reason: ${results[0].error}`);
+    if (results.some((r) => r.quota)) {
+      console.log(`\n   This is a QUOTA limit, not a fault in the agent. Any of these fixes it:`);
+      console.log(`     1. Give this agent its own key — add REVIEW_GEMINI_KEY as a secret.`);
+      console.log(`        The compliance agents run daily on GEMINI_KEY and may spend it first.`);
+      console.log(`     2. Enable billing on the Google AI Studio project. Search grounding is`);
+      console.log(`        metered far more tightly than ordinary calls and the free allowance is small.`);
+      console.log(`     3. Run it again tomorrow — the quota resets daily.`);
+    }
   }
 
   const reviews = collect(results);
