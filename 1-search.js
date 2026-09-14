@@ -11,37 +11,59 @@ const KEY = () => SETTINGS.GEMINI_KEY;
 // "no longer available". So rather than hardcoding one, the API is asked which models
 // exist and which support search grounding, and the best available is used. The result
 // is cached for the run.
-let PICKED = null;
-async function pickModel(log = console.log) {
-  if (PICKED) return PICKED;
-  const preferred = [SETTINGS.SEARCH_MODEL, "gemini-flash-latest", "gemini-pro-latest",
-                     "gemini-2.0-flash", "gemini-flash-lite-latest"];
+let PICKED = null, ANALYSIS = null, AVAILABLE = null;
+
+async function listModels() {
+  if (AVAILABLE) return AVAILABLE;
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${KEY()}&pageSize=200`);
     const d = await res.json();
     if (!res.ok) throw new Error(d?.error?.message || `${res.status}`);
-    const usable = (d.models || [])
+    AVAILABLE = (d.models || [])
       .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
       .map((m) => String(m.name).replace(/^models\//, ""))
       .filter((n) => !/embedding|aqa|imagen|veo|tts/i.test(n));
-
-    // the first preference that actually exists
-    for (const want of preferred) {
-      const hit = usable.find((n) => n === want) || usable.find((n) => n.startsWith(want));
-      if (hit) { PICKED = hit; log(`  using model: ${hit}`); return PICKED; }
-    }
-    // otherwise any flash model, then anything at all
-    PICKED = usable.find((n) => /flash/i.test(n)) || usable[0];
-    if (PICKED) { log(`  no preferred model available, using: ${PICKED}`); return PICKED; }
-    throw new Error("the key has no usable models");
-  } catch (e) {
-    log(`  could not list models (${e.message}); falling back to ${preferred[1]}`);
-    PICKED = preferred[1];
-    return PICKED;
-  }
+    return AVAILABLE;
+  } catch (e) { AVAILABLE = { error: e.message }; return AVAILABLE; }
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The model used for SEARCHING must be in the 2.5 family: on the free tier that is the
+// only family where Google Search grounding works. A 3.x model returns a quota error
+// immediately, whatever the actual usage.
+async function pickModel(log = console.log) {
+  if (PICKED) return PICKED;
+  const all = await listModels();
+  if (all.error) { log(`  could not list models (${all.error}); trying ${SETTINGS.SEARCH_MODEL}`); PICKED = SETTINGS.SEARCH_MODEL; return PICKED; }
+
+  const twoFive = all.filter((n) => SETTINGS.SEARCH_MODEL_FAMILY.test(n));
+  const order = [SETTINGS.SEARCH_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"];
+  for (const want of order) {
+    const hit = twoFive.find((n) => n === want) || twoFive.find((n) => n.startsWith(want));
+    if (hit) { PICKED = hit; log(`  search model: ${hit}  (2.5 family — required for grounding on the free tier)`); return PICKED; }
+  }
+  if (twoFive.length) { PICKED = twoFive[0]; log(`  search model: ${PICKED}`); return PICKED; }
+
+  log(`  !! This key has NO 2.5 model available, and free-tier Google Search grounding only`);
+  log(`     works on the 2.5 family. Searching will fail until the project has billing`);
+  log(`     enabled, which unlocks grounding on the newer models.`);
+  log(`     Models this key can see: ${all.slice(0, 12).join(", ")}${all.length > 12 ? ` and ${all.length - 12} more` : ""}`);
+  PICKED = null;
+  return null;
+}
+
+// Analysis does no searching, so any model will do.
+async function pickAnalysisModel(log = () => {}) {
+  if (ANALYSIS) return ANALYSIS;
+  const all = await listModels();
+  if (all.error) { ANALYSIS = SETTINGS.ANALYSE_MODEL; return ANALYSIS; }
+  const order = [SETTINGS.ANALYSE_MODEL, "gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest"];
+  for (const want of order) {
+    const hit = all.find((n) => n === want) || all.find((n) => n.startsWith(want));
+    if (hit) { ANALYSIS = hit; log(`  analysis model: ${hit}`); return ANALYSIS; }
+  }
+  ANALYSIS = all.find((n) => /flash/i.test(n)) || all[0];
+  return ANALYSIS;
+}
 
 async function grounded(prompt, model, attempt = 0) {
   if (!KEY()) return { error: "no API key" };
@@ -69,7 +91,8 @@ async function grounded(prompt, model, attempt = 0) {
 const namesLine = () => BUSINESS.aliases.map((a) => `"${a}"`).join(", ");
 
 async function findAt(group) {
-  const model = await pickModel();
+  const model = await pickModel(() => {});
+  if (!model) return { place: group, error: "no 2.5 model available for grounded search on this key", noModel: true };
   const members = PLACES.filter((p) => group.places.includes(p.id));
   const where = members.map((p) => `${p.label} (${p.hint})`).join("; ");
 
@@ -104,9 +127,9 @@ Reply ONLY JSON:
   // some models reject the search tool rather than the request; try the next one before
   // reporting the whole place as unsearchable
   if (r.error && /tool|google_search|not supported|INVALID_ARGUMENT/i.test(r.error)) {
-    PICKED = null;
-    const alt = await pickModel(() => {});
-    if (alt && alt !== model) r = await grounded(prompt, alt);
+    const all = await listModels();
+    const alt = Array.isArray(all) ? all.filter((n) => SETTINGS.SEARCH_MODEL_FAMILY.test(n) && n !== model)[0] : null;
+    if (alt) r = await grounded(prompt, alt);
   }
   if (r.error) return { place: group, error: r.error, quota: r.quota };
   const m = String(r.text || "").match(/\{[\s\S]*\}/);
@@ -117,4 +140,4 @@ Reply ONLY JSON:
   } catch (e) { return { place: group, error: `could not parse the answer: ${e.message}` }; }
 }
 
-module.exports = { findAt, grounded, pickModel };
+module.exports = { findAt, grounded, pickModel, pickAnalysisModel, listModels };
