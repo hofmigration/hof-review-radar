@@ -67,9 +67,15 @@ check("every place belongs to a group", (() => {
 check("a quota failure says so, and says how to fix it", (() => {
   const h = buildReport({ themes:{}, counts: tally([]),
     results: GROUPS.map((g)=>({ place:g, error:"You exceeded your current quota", quota:true })), dryRun:true });
-  return /quota ran out/.test(h) && /own API key/.test(h) && !/No repeated complaints/.test(h);
+  return /quota was refused/.test(h) && /2\.5 models/.test(h) && !/No repeated complaints/.test(h);
 })());
 check("the agent can use a key of its own", /REVIEW_GEMINI_KEY/.test(require("fs").readFileSync("./config.js","utf8")));
+check("the search model is in the 2.5 family, which free-tier grounding requires",
+  SETTINGS.SEARCH_MODEL_FAMILY.test(SETTINGS.SEARCH_MODEL), SETTINGS.SEARCH_MODEL);
+check("searching and analysing use different models",
+  SETTINGS.SEARCH_MODEL !== SETTINGS.ANALYSE_MODEL);
+check("the family rule actually rejects a 3.x model",
+  !SETTINGS.SEARCH_MODEL_FAMILY.test("gemini-flash-latest") && !SETTINGS.SEARCH_MODEL_FAMILY.test("gemini-3.8-flash"));
 check("a total search failure is not reported as 'no reviews'",
   /Nothing could be searched/.test(brokenHtml) && !/No repeated complaints/.test(brokenHtml));
 check("the model is a preference, not hardcoded into the search",
