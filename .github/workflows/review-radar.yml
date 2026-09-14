@@ -31,6 +31,9 @@ jobs:
       - run: node radar.js
         env:
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          # optional: a key of this agent's own, so the daily compliance agents cannot
+          # spend the quota before this one runs
+          REVIEW_GEMINI_KEY: ${{ secrets.REVIEW_GEMINI_KEY }}
           RESEND_KEY: ${{ secrets.RESEND_KEY }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
           REPORT_TO: ${{ inputs.report_to || 'razaali@hofmigration.com' }}
