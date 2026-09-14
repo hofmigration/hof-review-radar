@@ -26,14 +26,14 @@ const BUSINESS = {
 // Google Search grounding is metered far more tightly than ordinary model calls and
 // eight separate searches was enough to exhaust the quota on its own.
 const PLACES = [
-  { id: "google",      label: "Google reviews",        hint: "Google Maps and Google Business Profile reviews" },
-  { id: "trustpilot",  label: "Trustpilot",            hint: "trustpilot.com" },
-  { id: "facebook",    label: "Facebook",              hint: "facebook.com page reviews and recommendations" },
-  { id: "reddit",      label: "Reddit",                hint: "reddit.com threads and comments" },
-  { id: "forums",      label: "Immigration forums",    hint: "expat and immigration forums, Canadavisa, Pakistani and UAE expat forums" },
-  { id: "complaints",  label: "Complaint sites",       hint: "complaint boards, scam-report sites, consumer forums" },
-  { id: "glassdoor",   label: "Employer reviews",      hint: "Glassdoor, Indeed and AmbitionBox — staff reviews, which clients read too" },
-  { id: "youtube",     label: "YouTube and social",    hint: "YouTube comments, TikTok, Instagram and X posts about the company" },
+  { id: "google",      label: "Google reviews",     query: "google maps reviews" },
+  { id: "trustpilot",  label: "Trustpilot",         query: "site:trustpilot.com" },
+  { id: "facebook",    label: "Facebook",           query: "site:facebook.com reviews" },
+  { id: "reddit",      label: "Reddit",             query: "site:reddit.com" },
+  { id: "forums",      label: "Immigration forums", query: "forum experience complaint" },
+  { id: "complaints",  label: "Complaint sites",    query: "complaint scam report" },
+  { id: "glassdoor",   label: "Employer reviews",   query: "site:glassdoor.com OR site:indeed.com OR site:ambitionbox.com" },
+  { id: "youtube",     label: "YouTube and social", query: "site:youtube.com OR site:x.com review" },
 ];
 
 // Places are searched in groups. Fewer, wider searches cost a fraction of the quota and
@@ -69,9 +69,20 @@ const SETTINGS = {
   //
   // So the search must be a 2.5 model. The analysis does no searching, so it can use
   // anything and is left on the newer, cheaper flash.
-  SEARCH_MODEL: process.env.SEARCH_MODEL || "gemini-2.5-flash",
-  SEARCH_MODEL_FAMILY: /2\.5/,      // free-tier grounding requires this
+  // Only ONE model is used now, and only to READ pages — no search grounding, which is
+  // what kept failing. Ordinary calls work fine on the free tier.
   ANALYSE_MODEL: process.env.ANALYSE_MODEL || "gemini-flash-latest",
+
+  // How much to read. Each page is one fetch, which costs nothing.
+  PAGES_PER_SITE: 3,
+  PAGES_PER_GROUP: 8,
+
+  // Pages you already know about. These are read even with NO search key, so the agent
+  // is useful immediately. Add your real Google, Trustpilot and Facebook review pages.
+  SEED_URLS: [
+    // { place: "trustpilot", url: "https://www.trustpilot.com/review/hofmigration.com" },
+    // { place: "google",     url: "https://www.google.com/maps/place/..." },
+  ],
 
   MAX_PLACES: 0,                      // 0 = every place above
   MIN_REVIEWS_FOR_THEME: 2,           // a theme needs this many mentions to be reported
